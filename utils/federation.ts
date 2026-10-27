@@ -359,7 +359,11 @@ export async function startFederationGateway(params: {
         return;
       }
       // streamed, not buffered: SSE responses must reach the agent as they arrive
-      Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream).pipe(res);
+      // pipe() doesn't forward source errors, and an upstream that dies mid-stream
+      // would otherwise leave the agent waiting out its own timeout
+      Readable.fromWeb(upstream.body as import("node:stream/web").ReadableStream)
+        .on("error", () => res.destroy())
+        .pipe(res);
     } catch (error) {
       if (abort.signal.aborted) return;
       sendError(
