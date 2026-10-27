@@ -284,7 +284,26 @@ export async function main(): Promise<MainResult> {
   // OpenAI tokens behind a localhost gateway that re-exchanges before they expire. after the
   // db secrets so an explicitly federated workflow outranks a stored key, and before model
   // discovery so opencode's introspection sees the provider as authorized.
-  await using federation = await startFederation({ oidc: oidcCredentials });
+  // its failures (a rejected rule, a partial env set, no `id-token: write`) are setup errors
+  // with remediation copy, thrown before `toolContext` exists, so render them here like the
+  // commercial-gate path above — the outer handler only reaches `core.setFailed`.
+  await using federation = await startFederation({ oidc: oidcCredentials }).catch(
+    async (error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      const body = `### Workload identity federation failed\n\n${message}`;
+      try {
+        await using _commentTokenRef = await resolveTokens({
+          push: "disabled",
+          authorPermission: undefined,
+          oidc: oidcCredentials,
+        });
+        await writeRunErrorOutputs({ rendered: { summary: body, comment: body }, toolState });
+      } catch {
+        // no token to comment with (e.g. no OIDC at all) — the job log still has the error
+      }
+      throw error;
+    }
+  );
   if (federation) {
     const managed = new Set(federation.managedEnv);
     injected.splice(0, injected.length, ...injected.filter((name) => !managed.has(name)));

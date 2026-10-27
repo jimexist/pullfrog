@@ -169,6 +169,9 @@ function isTransientExchangeError(error: unknown): boolean {
 /** refresh this long before expiry — capped at half the lifetime, since an OpenAI token may only live ~5 min. */
 const REFRESH_MARGIN_MS = 120_000;
 
+/** a token this close to expiry isn't served as a fallback: the request it rides would outlive it. */
+const EXPIRY_SAFETY_MS = 10_000;
+
 export interface TokenSource {
   get: () => Promise<string>;
 }
@@ -183,7 +186,7 @@ export function createTokenSource(params: {
   const { config } = params;
   const fetchImpl = params.fetchImpl ?? fetch;
   const now = params.now ?? Date.now;
-  let cached: { token: string; refreshAt: number } | undefined;
+  let cached: { token: string; refreshAt: number; expiresAt: number } | undefined;
   let inflight: Promise<string> | undefined;
 
   const exchangeOnce = async (): Promise<string> => {
@@ -217,9 +220,11 @@ export function createTokenSource(params: {
     }
     maskSecret(body.access_token);
     const lifetimeMs = Math.max(0, (body.expires_in ?? 300) * 1000);
+    const issuedAt = now();
     cached = {
       token: body.access_token,
-      refreshAt: now() + lifetimeMs - Math.min(REFRESH_MARGIN_MS, lifetimeMs / 2),
+      refreshAt: issuedAt + lifetimeMs - Math.min(REFRESH_MARGIN_MS, lifetimeMs / 2),
+      expiresAt: issuedAt + lifetimeMs,
     };
     return body.access_token;
   };
@@ -235,9 +240,22 @@ export function createTokenSource(params: {
     get: () => {
       if (cached && now() < cached.refreshAt) return Promise.resolve(cached.token);
       // one exchange at a time: concurrent requests during a refresh share it
-      inflight ??= exchange().finally(() => {
-        inflight = undefined;
-      });
+      inflight ??= exchange()
+        .catch((error: unknown) => {
+          // the refresh runs ahead of expiry, so a token-endpoint blip need not fail
+          // live agent calls: keep serving the old token until it actually expires.
+          const fallback = cached;
+          if (fallback && now() < fallback.expiresAt - EXPIRY_SAFETY_MS) {
+            log.warning(
+              `» ${config.displayName} federation: refresh failed, using the current token until it expires (${error instanceof Error ? error.message : String(error)})`
+            );
+            return fallback.token;
+          }
+          throw error;
+        })
+        .finally(() => {
+          inflight = undefined;
+        });
       return inflight;
     },
   };

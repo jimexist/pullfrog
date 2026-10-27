@@ -152,6 +152,28 @@ describe("token source", () => {
     expect(await tokens.get()).toBe("tok_2");
   });
 
+  it("keeps serving the current token when a refresh fails before it expires", async () => {
+    let clock = 0;
+    let fail = false;
+    const tokens = createTokenSource({
+      config: anthropicConfig(),
+      mintJwt: async () => "jwt",
+      fetchImpl: (async () =>
+        fail
+          ? jsonResponse({ error: "denied" }, 401)
+          : jsonResponse({ access_token: "tok_1", expires_in: 600 })) as typeof fetch,
+      now: () => clock,
+    });
+    expect(await tokens.get()).toBe("tok_1");
+    fail = true;
+    // past the refresh point, still well before expiry
+    clock = 500_000;
+    expect(await tokens.get()).toBe("tok_1");
+    // once the token has actually expired, the exchange error surfaces
+    clock = 600_000;
+    await expect(tokens.get()).rejects.toThrowError(/rejected \(401\)/);
+  });
+
   it("shares one exchange between concurrent callers", async () => {
     let exchanges = 0;
     const tokens = createTokenSource({
