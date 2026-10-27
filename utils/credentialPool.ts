@@ -93,6 +93,8 @@ export async function initializeCredentialPool(input: {
   ctx: RunContextData;
   slug: string | undefined;
   injected: string[];
+  /** subscriptions a federated provider displaced; loading one back would outrank federation. */
+  exclude?: readonly string[] | undefined;
 }) {
   const access = input.ctx.credentialAccess;
   if (!access) return;
@@ -112,6 +114,7 @@ export async function initializeCredentialPool(input: {
   for (const name of subscriptionNameSchema.options) {
     if (model && subscriptionForModel(model) !== name) continue;
     if (workflowCredentials[name]) continue;
+    if (input.exclude?.includes(name)) continue;
     const candidate = access.candidates.find((item) => item.name === name);
     if (!candidate) continue;
     const selected = await select({ access, candidate }).catch(() => {

@@ -38,6 +38,7 @@ import {
 } from "./utils/credentialPool.ts";
 import { recordDiffReadFromToolUse } from "./utils/diffCoverage.ts";
 import { onExitSignal } from "./utils/exitHandler.ts";
+import { startFederation } from "./utils/federation.ts";
 import { resolveGit, setGitAuthServer } from "./utils/gitAuth.ts";
 import { startGitAuthServer } from "./utils/gitAuthServer.ts";
 import {
@@ -279,9 +280,24 @@ export async function main(): Promise<MainResult> {
     if (count > 0) log.info(`» ${count} db secret(s) loaded`);
   }
 
+  // keyless provider auth: exchange the run's GitHub OIDC token for short-lived Anthropic /
+  // OpenAI tokens behind a localhost gateway that re-exchanges before they expire. after the
+  // db secrets so an explicitly federated workflow outranks a stored key, and before model
+  // discovery so opencode's introspection sees the provider as authorized.
+  await using federation = await startFederation({ oidc: oidcCredentials });
+  if (federation) {
+    const managed = new Set(federation.managedEnv);
+    injected.splice(0, injected.length, ...injected.filter((name) => !managed.has(name)));
+  }
+
   // load one stored subscription per provider for the discovery below. `injected` keeps a
   // workflow credential distinct from a stored one now that both sit in process.env.
-  await initializeCredentialPool({ ctx: runContext, slug: payload.model, injected });
+  await initializeCredentialPool({
+    ctx: runContext,
+    slug: payload.model,
+    injected,
+    exclude: federation?.suppressedCredentials,
+  });
 
   // materialize the subscription auth.json entries (idempotent — the opencode
   // agent re-calls both inside run() and writes the same file; the writer

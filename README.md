@@ -179,3 +179,29 @@ For longer prompts you want to version and reuse, commit the prompt text to the 
 Pass a JSON Schema via the `output_schema` input to make the agent's output required and validated — the bridge between an agent's reasoning and the hard steps that follow it. See [capturing agent output](https://docs.pullfrog.com/headless-action#capturing-agent-output) for the details and a worked example.
 
 </details>
+
+<details>
+<summary><strong>Keyless auth with OIDC (workload identity federation)</strong></summary>
+
+Instead of storing an `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` secret, Pullfrog can exchange the run's GitHub Actions OIDC token for a short-lived provider token. It does the exchange through a localhost gateway and re-exchanges before each token expires, so long runs keep working. Agents only ever see a per-run placeholder key. The workflow already grants `id-token: write`, so nothing else changes on the GitHub side.
+
+First register `https://token.actions.githubusercontent.com` as an issuer with each provider and create a rule that matches this repository: [Anthropic](https://platform.claude.com/docs/en/manage-claude/wif-providers/github-actions), [OpenAI](https://developers.openai.com/api/docs/guides/workload-identity-federation/github-actions). Then set the IDs it gives you (they are identifiers, not secrets):
+
+```yaml
+- uses: pullfrog/pullfrog@v0
+  env:
+    # Anthropic
+    ANTHROPIC_FEDERATION_RULE_ID: ${{ vars.ANTHROPIC_FEDERATION_RULE_ID }}
+    ANTHROPIC_ORGANIZATION_ID: ${{ vars.ANTHROPIC_ORGANIZATION_ID }}
+    ANTHROPIC_SERVICE_ACCOUNT_ID: ${{ vars.ANTHROPIC_SERVICE_ACCOUNT_ID }}
+    # ANTHROPIC_WORKSPACE_ID: only when the rule covers several workspaces
+    # ANTHROPIC_WIF_AUDIENCE: defaults to https://api.anthropic.com
+    # OpenAI
+    OPENAI_IDENTITY_PROVIDER_ID: ${{ vars.OPENAI_IDENTITY_PROVIDER_ID }}
+    OPENAI_SERVICE_ACCOUNT_ID: ${{ vars.OPENAI_SERVICE_ACCOUNT_ID }}
+    OPENAI_WIF_AUDIENCE: ${{ vars.OPENAI_WIF_AUDIENCE }} # must match the provider's audience
+```
+
+When federation is configured for a provider, it takes precedence over that provider's API key or subscription, and it can't be combined with `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`. Self-hosted runners with egress allowlists also need `auth.openai.com` for OpenAI.
+
+</details>
