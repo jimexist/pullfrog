@@ -1267,10 +1267,12 @@ export const providers = {
         openRouterResolve: "openrouter/openai/gpt-5.4",
         fallback: "openrouter/gpt-sol",
       },
+      // OpenRouter dropped `openai/o4-mini` on 2026-10-28 (only `:batch` remains) — folds stored pins to Luna.
       "o4-mini": {
         displayName: "O4 Mini",
         resolve: "openrouter/openai/o4-mini",
         openRouterResolve: "openrouter/openai/o4-mini",
+        fallback: "openrouter/gpt-luna",
       },
       "gemini-pro": {
         displayName: "Gemini Pro",
@@ -1577,6 +1579,9 @@ export function modelHasStoredAuth(params: { model: string; secretNames: string[
     ...getModelEnvVars(slug),
     ...getModelManagedCredentials(slug),
     ...(HARNESS_ONLY_CREDENTIALS[getModelProvider(slug)] ?? []),
+    // the default endpoint's vars above still count: a runner holding no such set runs the
+    // slug as a raw model id on it
+    ...openAICompatibleSetEnvVars(slug),
   ];
   return authVars.some((v) => params.secretNames.includes(v));
 }
@@ -2153,6 +2158,78 @@ export const OPENAI_COMPATIBLE_CONTEXT_ENV = "OPENAI_COMPATIBLE_CONTEXT";
  * `context` + `output` together, so the pair is validated and emitted as a unit.
  */
 export const OPENAI_COMPATIBLE_MAX_OUTPUT_ENV = "OPENAI_COMPATIBLE_MAX_OUTPUT";
+
+/**
+ * a NAMED OpenAI-compatible endpoint: the slug `openai-compatible/<name>` runs on the five
+ * `OPENAI_COMPATIBLE_<NAME>_*` values, so one account holds several endpoints and each repo,
+ * trigger or `--model=` picks one. `byok` stays the unnamed default on the bare names. 32 is
+ * what keeps `OPENAI_COMPATIBLE_<NAME>_MAX_OUTPUT` under the 64-character secret-name cap.
+ */
+export function isOpenAICompatibleSetName(name: string): boolean {
+  return name !== "byok" && name.length <= 32 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(name);
+}
+
+/**
+ * the set a slug names, by shape alone. `openai-compatible/<x>` is also a raw specifier (model
+ * `x` on the default endpoint), so a runner treats it as a set only when it holds that set's values.
+ */
+export function openAICompatibleSetName(slug: string): string | undefined {
+  const prefix = `${OPENAI_COMPATIBLE_PROVIDER}/`;
+  if (!slug.startsWith(prefix)) return undefined;
+  const name = slug.slice(prefix.length);
+  return isOpenAICompatibleSetName(name) ? name : undefined;
+}
+
+export const OPENAI_COMPATIBLE_FIELDS = [
+  "baseUrl",
+  "apiKey",
+  "model",
+  "context",
+  "maxOutput",
+] as const;
+
+/** the env var names one endpoint is configured by: a named set's, or the default's. */
+export function openAICompatibleEnv(
+  name?: string
+): Record<(typeof OPENAI_COMPATIBLE_FIELDS)[number], string> {
+  const prefix = `OPENAI_COMPATIBLE_${name ? `${name.toUpperCase().replaceAll("-", "_")}_` : ""}`;
+  return {
+    baseUrl: `${prefix}BASE_URL`,
+    apiKey: `${prefix}API_KEY`,
+    model: `${prefix}MODEL`,
+    context: `${prefix}CONTEXT`,
+    maxOutput: `${prefix}MAX_OUTPUT`,
+  };
+}
+
+/** a named set's credential vars, its counterpart of the provider's `envVars`; `[]` for any other slug. */
+function openAICompatibleSetEnvVars(slug: string): string[] {
+  const set = openAICompatibleSetName(slug);
+  if (!set) return [];
+  const env = openAICompatibleEnv(set);
+  return [env.baseUrl, env.apiKey, env.model];
+}
+
+/** the set a variable belongs to: `OPENAI_COMPATIBLE_VLLM_A_API_KEY` → `vllm-a`. */
+export function openAICompatibleSetOf(envName: string): string | undefined {
+  const match =
+    /^OPENAI_COMPATIBLE_([A-Z0-9]+(?:_[A-Z0-9]+)*)_(?:BASE_URL|API_KEY|MODEL|CONTEXT|MAX_OUTPUT)$/.exec(
+      envName
+    );
+  const name = match?.[1]?.toLowerCase().replaceAll("_", "-");
+  return name && isOpenAICompatibleSetName(name) ? name : undefined;
+}
+
+/** the named endpoints `names` (stored secret or env var names) hold any value of. */
+export function openAICompatibleSets(names: string[]): string[] {
+  return [...new Set(names.flatMap((name) => openAICompatibleSetOf(name) ?? []))].sort();
+}
+
+/** a named endpoint as a picker entry: the default endpoint's routing alias under its own slug. */
+export function openAICompatibleSetAlias(set: string): ModelAlias | undefined {
+  const byok = resolveDisplayAlias(`${OPENAI_COMPATIBLE_PROVIDER}/byok`);
+  return byok && { ...byok, slug: `${OPENAI_COMPATIBLE_PROVIDER}/${set}`, displayName: set };
+}
 
 // ── provider gateways ──────────────────────────────────────────────────────────
 

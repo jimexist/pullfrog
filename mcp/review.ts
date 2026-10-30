@@ -1190,7 +1190,10 @@ export async function createAndSubmitWithFooter(
  */
 export async function reportReviewNodeId(
   ctx: ToolContext,
-  params: { nodeId: string }
+  params: { nodeId: string; reviewedSha: string | undefined }
 ): Promise<void> {
-  await patchWorkflowRunFields(ctx, { reviewNodeId: params.nodeId });
+  await patchWorkflowRunFields(ctx, {
+    reviewNodeId: params.nodeId,
+    reviewedCommitSha: params.reviewedSha,
+  });
 }

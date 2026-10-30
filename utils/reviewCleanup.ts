@@ -29,7 +29,7 @@ export async function postReviewCleanup(ctx: ToolContext): Promise<void> {
     // dedup dropped every commit pushed after its checkout: flag it, then re-review them.
     const checkoutSha = primaryRepoState(ctx.toolState).checkoutSha;
     if (ctx.toolState.selectedMode === "IncrementalReview" && checkoutSha) {
-      await patchWorkflowRunFields(ctx, { reviewSkipped: true });
+      await patchWorkflowRunFields(ctx, { reviewSkipped: true, reviewedCommitSha: checkoutSha });
       await bestEffort(
         () => dispatchFollowUpReReview(ctx, checkoutSha),
         "follow-up re-review dispatch"
@@ -40,7 +40,7 @@ export async function postReviewCleanup(ctx: ToolContext): Promise<void> {
   delete ctx.toolState.review;
 
   // mark review as submitted — unlocks webhook dedup for new pushes
-  await bestEffort(() => reportReviewNodeId(ctx, { nodeId: review.nodeId }), "reportReviewNodeId");
+  await bestEffort(() => reportReviewNodeId(ctx, review), "reportReviewNodeId");
 
   // dispatch follow-up if PR HEAD moved past the reviewed commit
   if (review.reviewedSha) {

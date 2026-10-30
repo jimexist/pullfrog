@@ -7,7 +7,13 @@ import * as yes from "yes";
 import { primaryRepoState, type RepoToolState, requireRepoState } from "../toolState.ts";
 import { createChangeImpactArtifact } from "../utils/changeImpact.ts";
 import { log } from "../utils/cli.ts";
-import { countLines, createDiffCoverageState } from "../utils/diffCoverage.ts";
+import {
+  countLines,
+  createDiffCoverageState,
+  parseDiffTocEntries,
+  parseIncrementalDiffEntries,
+} from "../utils/diffCoverage.ts";
+import { GENERATED } from "../utils/generatedFiles.ts";
 import { $git, $gitFetchWithDeepen, DEEPEN_RETRY_DEPTH } from "../utils/gitAuth.ts";
 import { executeLifecycleHook } from "../utils/lifecycle.ts";
 import { computeIncrementalDiff } from "../utils/rangeDiff.ts";
@@ -122,8 +128,9 @@ export function formatFilesWithLineNumbers(files: PullFile[]): FormatFilesResult
   const tocLines = [`## Files (${files.length})`];
   for (const entry of tocEntries) {
     const anchor = createHash("sha256").update(entry.filename).digest("hex");
+    const generated = GENERATED.test(entry.filename) ? " · generated" : "";
     tocLines.push(
-      `- ${entry.filename} → lines ${entry.startLine}-${entry.endLine} · diff-${anchor}`
+      `- ${entry.filename} → lines ${entry.startLine}-${entry.endLine} · diff-${anchor}${generated}`
     );
   }
   tocLines.push("");
@@ -735,6 +742,45 @@ function describeHead(h: InitialHead): string {
   return `detached HEAD \`${h.sha}\``;
 }
 
+const FORMER_BASE_TIPS_QUERY = `
+  query ($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        timelineItems(itemTypes: [BASE_REF_FORCE_PUSHED_EVENT], last: 100) {
+          nodes { ... on BaseRefForcePushedEvent { beforeCommit { oid } } }
+        }
+      }
+    }
+  }
+`;
+
+type FormerBaseTipsResponse = {
+  repository: {
+    pullRequest: {
+      timelineItems: { nodes: { beforeCommit: { oid: string } | null }[] };
+    };
+  };
+};
+
+/** tips the PR's base branch was force-pushed away from. best-effort: none when the lookup fails. */
+async function getFormerBaseTips(ctx: ToolContext, pullNumber: number): Promise<string[]> {
+  try {
+    const response = await ctx.octokit.graphql<FormerBaseTipsResponse>(FORMER_BASE_TIPS_QUERY, {
+      owner: ctx.repo.owner,
+      repo: ctx.repo.name,
+      number: pullNumber,
+    });
+    return response.repository.pullRequest.timelineItems.nodes.flatMap((node) =>
+      node.beforeCommit ? [node.beforeCommit.oid] : []
+    );
+  } catch (error) {
+    log.warning(
+      `» former base tips unavailable: ${error instanceof Error ? error.message : String(error)}`
+    );
+    return [];
+  }
+}
+
 export function CheckoutPrTool(ctx: ToolContext) {
   const runCheckout = async (
     pull_number: number,
@@ -788,6 +834,8 @@ export function CheckoutPrTool(ctx: ToolContext) {
 
     // compute incremental diff if we have a beforeSha to compare against
     let incrementalDiffPath: string | undefined;
+    let incrementalDiff: string | undefined;
+    let incrementalEmpty = false;
     let incrementalUnavailable = false;
     let incrementalUnavailableReason: string | undefined;
     if (primary.beforeSha) {
@@ -796,6 +844,7 @@ export function CheckoutPrTool(ctx: ToolContext) {
         baseBranch: pr.baseRef,
         beforeSha: primary.beforeSha,
         headSha: checkoutSha,
+        formerBaseTips: await getFormerBaseTips(ctx, pull_number),
       });
       if (incremental.status === "ok") {
         incrementalDiffPath = join(
@@ -803,9 +852,12 @@ export function CheckoutPrTool(ctx: ToolContext) {
           `pr-${pull_number}-${beforeShort}-${headShort}-incremental.diff`
         );
         writeFileSync(incrementalDiffPath, incremental.diff);
+        incrementalDiff = incremental.diff;
         log.info(
           `» incremental diff computed (${incremental.diff.length} bytes) → ${incrementalDiffPath}`
         );
+      } else if (incremental.status === "empty") {
+        incrementalEmpty = true;
       } else if (incremental.status === "unavailable") {
         incrementalUnavailable = true;
         incrementalUnavailableReason = incremental.reason;
@@ -819,14 +871,24 @@ export function CheckoutPrTool(ctx: ToolContext) {
     const diffPath = join(tempDir, `pr-${pull_number}-${headShort}.diff`);
     writeFileSync(diffPath, formatResult.content);
     log.debug(`wrote diff to ${diffPath} (${formatResult.content.length} bytes)`);
-    primary.diffCoverage = createDiffCoverageState({
-      diffPath,
-      totalLines: countLines({ content: formatResult.content }),
-      toc: formatResult.toc,
-      previous: primary.diffCoverage,
-    });
+    // a re-review's checklist is the delta since the last review, not the whole PR again, and
+    // an unchanged delta has nothing to cover. generated files are never on the checklist.
+    const coverageEntries = incrementalDiff
+      ? parseIncrementalDiffEntries({ content: incrementalDiff })
+      : parseDiffTocEntries({ toc: formatResult.toc });
+    primary.diffCoverage = incrementalEmpty
+      ? undefined
+      : createDiffCoverageState({
+          diffPath: incrementalDiffPath ?? diffPath,
+          totalLines: countLines({ content: incrementalDiff ?? formatResult.content }),
+          tocEntries: coverageEntries.filter((entry) => !GENERATED.test(entry.filename)),
+          previous: primary.diffCoverage,
+        });
+    const coverage = primary.diffCoverage;
     log.debug(
-      `» diff coverage initialized: diffPath=${diffPath}, totalLines=${primary.diffCoverage.totalLines}, tocEntries=${primary.diffCoverage.tocEntries.length}`
+      coverage
+        ? `» diff coverage initialized: diffPath=${coverage.diffPath}, totalLines=${coverage.totalLines}, tocEntries=${coverage.tocEntries.length}`
+        : "» diff coverage skipped: no changes since the last reviewed version"
     );
 
     let impactPath: string | undefined;
@@ -887,20 +949,22 @@ export function CheckoutPrTool(ctx: ToolContext) {
 
     const incrementalInstructions = incrementalDiffPath
       ? `IMPORTANT: incrementalDiffPath contains ONLY the changes since the last reviewed version ` +
-        `(computed via range-diff). you MUST read incrementalDiffPath FIRST to understand what changed, ` +
-        `then use diffPath for full PR context. do NOT skip the incremental diff. `
-      : incrementalUnavailable
-        ? // say it FAILED rather than leaving the agent to infer "nothing changed"
-          // from an absent field. only suggest diff-tree when the previous
-          // revision is actually PRESENT locally — if the fetch never landed it,
-          // diff-tree needs that object too and would fail identically. see #1139.
-          `NOTE: an incremental diff was expected for this run but could not be computed` +
-          (incrementalUnavailableReason ? ` (${incrementalUnavailableReason})` : "") +
-          `. review the full diffPath instead. ` +
-          (hasLocalCommit(primary.beforeSha)
-            ? `if you need just the delta, \`git diff-tree -p ${primary.beforeSha} ${checkoutSha}\` works without a merge base. `
-            : `the previous revision was never fetched into this shallow checkout, so the full diff is the only option. `)
-        : "";
+        `(computed via range-diff), and it — not diffPath's TOC — is this review's coverage checklist. ` +
+        `read it FIRST and in full, then read only the diffPath ranges the delta needs for context. `
+      : incrementalEmpty
+        ? `NOTE: the PR's net changes are identical to the last reviewed version (e.g. a rebase with no content change), so there is no new diff to cover. `
+        : incrementalUnavailable
+          ? // say it FAILED rather than leaving the agent to infer "nothing changed"
+            // from an absent field. only suggest diff-tree when the previous
+            // revision is actually PRESENT locally — if the fetch never landed it,
+            // diff-tree needs that object too and would fail identically. see #1139.
+            `NOTE: an incremental diff was expected for this run but could not be computed` +
+            (incrementalUnavailableReason ? ` (${incrementalUnavailableReason})` : "") +
+            `. review the full diffPath instead. ` +
+            (hasLocalCommit(primary.beforeSha)
+              ? `if you need just the delta, \`git diff-tree -p ${primary.beforeSha} ${checkoutSha}\` works without a merge base. `
+              : `the previous revision was never fetched into this shallow checkout, so the full diff is the only option. `)
+          : "";
 
     const impactInstructions = impactPath
       ? ` impactPath contains bounded, deterministic reference leads for semantic atoms changed by the PR. ` +
@@ -973,7 +1037,7 @@ export function CheckoutPrTool(ctx: ToolContext) {
       instructions:
         incrementalInstructions +
         `the diff file at diffPath contains a table of contents (TOC) at the top listing every changed file with its line range. ` +
-        `use the TOC line ranges as your checklist and read specific files from the diff instead of reading the entire file. ` +
+        `absent incrementalDiffPath, use the TOC line ranges as your checklist (entries marked \`generated\` are off it) and read specific files from the diff instead of reading the entire file. ` +
         `for example, if the TOC says "src/foo.ts → lines 5-42", read lines 5-42 from diffPath to see that file's changes. ` +
         `review files selectively based on relevance rather than reading everything sequentially. ` +
         `to inspect the PR's changed files, use diffPath — do NOT run \`git diff\` to re-derive what's already in diffPath. the formatted diff with line numbers is authoritative. ` +

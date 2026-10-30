@@ -137,9 +137,9 @@ function createRuntimeContext(): RuntimeContext {
   env.COREPACK_NPM_REGISTRY = NPM_REGISTRY;
   // bypass customer-side release-age gates (npm's `min-release-age`, pnpm's
   // `minimumReleaseAge`) so our bootstrap can resolve the latest publish.
-  // pullfrog's npm version is server-stamped from a SHA-pinned action ref the
-  // customer already vets at the action layer — not a customer-vetted dep, so
-  // the gate is the wrong affordance here. env beats .npmrc in both tools.
+  // pullfrog is our runtime, not a customer-vetted dep: every action ref, a
+  // SHA pin included, tracks `^<version>` (wiki/action-bootstrap.md), so the
+  // gate is the wrong affordance here. env beats .npmrc in both tools.
   // npm uses `npm_config_*`; pnpm v11+ requires `pnpm_config_*` (the v10→v11
   // migration renamed the prefix). tracked: #713
   env.npm_config_min_release_age = "0";

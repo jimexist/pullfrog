@@ -187,6 +187,27 @@ function parseModel(
   return { providerID: value.slice(0, slash), modelID: value.slice(slash + 1) };
 }
 
+/**
+ * land a configured effort on the variants the server declares for a model the
+ * catalog has no alias for. it is the same `variants` map opencode's request
+ * path indexes, so the rung is one it can apply; a model it does not list gets
+ * no flag. see wiki/effort.md.
+ */
+async function resolveDeclaredRung(
+  ctx: AgentRunContext,
+  params: { client: OpencodeClient; model: { providerID: string; modelID: string } }
+): Promise<string | undefined> {
+  const resp = await params.client.config.providers();
+  const provider = resp.data?.providers.find((p) => p.id === params.model.providerID);
+  const variants = provider?.models[params.model.modelID]?.variants ?? {};
+  const name = `${params.model.providerID}/${params.model.modelID}`;
+  const rung = resolveRunEffort({ ...ctx, declaredVariants: Object.keys(variants) }).rung;
+  log.info(
+    `» effort: ${rung ? `${rung} (declared by opencode for ${name})` : `not applied — opencode declares no variants for ${name}`}`
+  );
+  return rung;
+}
+
 // ── server boot ────────────────────────────────────────────────────────────────
 
 interface ServerHandle {
@@ -1431,6 +1452,15 @@ export const opencode = agent({
       const labeler = new SessionLabeler();
       labeler.labelFor(sessionID);
 
+      const sdkModel = parseModel(model);
+      const variant =
+        effort.declarable && sdkModel
+          ? await resolveDeclaredRung(
+              { ...ctx, resolvedModel: rawModel },
+              { client, model: sdkModel }
+            )
+          : effort.rung;
+
       const runnerCtx: RunnerContext = {
         client,
         sessionID,
@@ -1439,7 +1469,7 @@ export const opencode = agent({
         labeler,
         toolState: ctx.toolState,
         // `rawModel` folds in the auto-select pick — see the opencode.ts twin.
-        variant: effort.rung,
+        variant,
         todoTracker: ctx.todoTracker,
         onActivityTimeout: ctx.onActivityTimeout,
         onTurnRecovered: ctx.onTurnRecovered,
@@ -1517,8 +1547,6 @@ export const opencode = agent({
         timeoutMs: AGENT_ACTIVITY_TIMEOUT_MS,
         abortTurn: () => turnController.abort(),
       });
-
-      const sdkModel = parseModel(model);
 
       // one salvage per run. the stall is provider-side, so a second attempt in
       // the same run is unlikely to differ, and each one costs up to a full idle

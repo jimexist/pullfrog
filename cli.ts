@@ -7,6 +7,7 @@ import { runCli as runConsoleCli } from "./commands/console.ts";
 import { runCli as runGhaCli } from "./commands/gha.ts";
 import { runCli as runInitCli } from "./commands/init.ts";
 import { runCli as runMcpCli } from "./commands/mcp.ts";
+import { runCli as runRunCli } from "./commands/run.ts";
 import { runCli as runSecretCli } from "./commands/secret.ts";
 import { runCli as runWatchCli } from "./commands/watch.ts";
 
@@ -22,6 +23,7 @@ function printMainUsage(stream: typeof console.log): void {
   stream("  console     open the repository or organization console");
   stream("  secret      list secret names, save or delete scoped credentials");
   stream("  init        install pullfrog on the current repository and open its dashboard");
+  stream("  run         start a run from a prompt, like the console's prompt box");
   stream("  auth        manage provider credentials for the current repository");
   stream("  watch       stream a PR's activity as one JSON line per event");
   stream("  mcp         run a stdio MCP server exposing PR activity as an agent tool");
@@ -85,6 +87,11 @@ async function run(): Promise<void> {
       prog: PROG,
       showHelp: globalParsed["--help"] === true,
     });
+    return;
+  }
+
+  if (command === "run") {
+    await runRunCli({ args: commandArgs, prog: PROG, showHelp: globalParsed["--help"] === true });
     return;
   }
 

@@ -10,6 +10,8 @@ import { START_KEY } from "./runContext.ts";
  * String-valued PATCH fields (all serialized identically on the wire):
  *  - artifact node IDs (`*NodeId`, `summarySnapshot`) — PATCHed incrementally
  *    by MCP tools as GitHub entities are created during the run.
+ *  - `reviewedCommitSha` — the PR head a review covered, sent with `reviewNodeId`
+ *    or `reviewSkipped`; the next re-review's delta starts there.
  *  - `model` — the resolved/effective model the run actually ran on (proxy spec
  *    for router/oss, post-fallback slug otherwise; NOT the configured
  *    `Repo.model` slug), PATCHed once at end-of-run so per-model cost analytics
@@ -23,6 +25,7 @@ const STRING_KEYS = [
   "prNodeId",
   "issueNodeId",
   "reviewNodeId",
+  "reviewedCommitSha",
   "planCommentNodeId",
   "summarySnapshot",
   "model",
@@ -47,7 +50,7 @@ const NUMBER_KEYS = [
 /** one-way flags, only ever sent as `true`. Keep in sync with `BOOLEAN_FIELDS` in the server route. */
 const FLAG_KEYS = ["reviewSkipped"] as const;
 
-export type WorkflowRunPatch = Partial<Record<(typeof STRING_KEYS)[number], string>> &
+export type WorkflowRunPatch = Partial<Record<(typeof STRING_KEYS)[number], string | undefined>> &
   Partial<Record<(typeof NUMBER_KEYS)[number], number>> &
   Partial<Record<(typeof FLAG_KEYS)[number], true>> & { succeeded?: boolean };
 

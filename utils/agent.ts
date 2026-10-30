@@ -8,8 +8,10 @@ import {
   getModelProvider,
   isBedrockAnthropicId,
   isVertexAnthropicId,
-  OPENAI_COMPATIBLE_MODEL_ENV,
+  OPENAI_COMPATIBLE_FIELDS,
   OPENAI_COMPATIBLE_PROVIDER,
+  openAICompatibleEnv,
+  openAICompatibleSetName,
   resolveCliModel,
   resolveDisplayAlias,
   VERTEX_MODEL_ID_ENV,
@@ -95,11 +97,13 @@ function resolveSlug(slug: string): string | undefined {
     }
     return `${AZURE_PROVIDER}/${deployment}`;
   }
-  if (alias?.routing === "openai-compatible") {
-    const modelId = process.env[OPENAI_COMPATIBLE_MODEL_ENV]?.trim();
+  const set = heldOpenAICompatibleSet(slug);
+  if (alias?.routing === "openai-compatible" || set) {
+    const modelEnv = openAICompatibleEnv(set).model;
+    const modelId = process.env[modelEnv]?.trim();
     if (!modelId) {
       throw new Error(
-        `\`${OPENAI_COMPATIBLE_MODEL_ENV}\` ${BYOK_SLUG_MARKER} \`${slug}\`. ` +
+        `\`${modelEnv}\` ${BYOK_SLUG_MARKER} \`${slug}\`. ` +
           "Set it to the model ID your endpoint serves, on the OpenAI-compatible provider in Pullfrog or in the workflow's `env:` block. " +
           "[OpenAI-compatible setup guide](https://docs.pullfrog.com/openai-compatible)"
       );
@@ -107,6 +111,36 @@ function resolveSlug(slug: string): string | undefined {
     return `${OPENAI_COMPATIBLE_PROVIDER}/${modelId}`;
   }
   return resolveCliModel(slug);
+}
+
+/**
+ * the named set `slug` picks, when this runner holds any of its values. holding none, the slug
+ * is a raw model id on the default endpoint, exactly as it was before sets existed.
+ */
+function heldOpenAICompatibleSet(slug: string): string | undefined {
+  const set = openAICompatibleSetName(slug);
+  return set && Object.values(openAICompatibleEnv(set)).some(hasEnvVar) ? set : undefined;
+}
+
+/**
+ * make the run's named set (`openai-compatible/<name>`) its endpoint: the set's five values
+ * replace the bare `OPENAI_COMPATIBLE_*` that validation and the opencode provider read. a value
+ * the set lacks is cleared, never inherited, so the default endpoint's key cannot reach the set's
+ * URL. returns the set, so setup errors can name its own variables.
+ */
+export function activateOpenAICompatibleSet(ctx: { slug: string | undefined }): string | undefined {
+  const slug = process.env.PULLFROG_MODEL?.trim() || ctx.slug?.trim();
+  const set = slug ? heldOpenAICompatibleSet(slug) : undefined;
+  if (!set) return undefined;
+  const from = openAICompatibleEnv(set);
+  const to = openAICompatibleEnv();
+  for (const field of OPENAI_COMPATIBLE_FIELDS) {
+    const value = process.env[from[field]];
+    if (value === undefined) delete process.env[to[field]];
+    else process.env[to[field]] = value;
+  }
+  log.info(`» using the OpenAI-compatible endpoint "${set}"`);
+  return set;
 }
 
 /**

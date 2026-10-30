@@ -53,18 +53,20 @@ function buildImplementPlanLink(ctx: ToolContext, issueNumber: number, commentId
   return `[Implement plan ➔](${apiUrl}/trigger/${ctx.repo.owner}/${ctx.repo.name}/${issueNumber}?action=implement&comment_id=${commentId})`;
 }
 
-function buildEnrichmentLinks(ctx: ToolContext): string[] {
+/** the issue a run answers on: its trigger's, else the first issue a run with no target read */
+function runIssueNumber(ctx: ToolContext): number | undefined {
+  return ctx.payload.event.issue_number ?? primaryRepoState(ctx.toolState).issueNumber;
+}
+
+function buildEnrichmentLinks(ctx: ToolContext, issueNumber: number | undefined): string[] {
   const event = ctx.payload.event;
-  if (
-    event.trigger !== "issues_opened" ||
-    event.is_pr ||
-    ctx.payload.prompt ||
-    ctx.toolState.selectedMode === "Build"
-  ) {
-    return [];
-  }
+  const mode = ctx.toolState.selectedMode;
+  const enriching =
+    mode === "Enrich" ||
+    (event.trigger === "issues_opened" && !ctx.payload.prompt && mode !== "Build");
+  if (issueNumber === undefined || event.is_pr || !enriching) return [];
   return [
-    `[Implement a fix ➔](${getApiUrl()}/trigger/${ctx.repo.owner}/${ctx.repo.name}/${event.issue_number}?action=build)`,
+    `[Implement a fix ➔](${getApiUrl()}/trigger/${ctx.repo.owner}/${ctx.repo.name}/${issueNumber}?action=build)`,
   ];
 }
 
@@ -114,12 +116,12 @@ export function CreateCommentTool(ctx: ToolContext) {
 
       // a standalone comment on the run's OWN target is the deliverable, so
       // report_progress must not add a second one (see its guard).
-      if (issueNumber === ctx.payload.event.issue_number) {
+      const ownTarget = issueNumber === runIssueNumber(ctx);
+      if (ownTarget) {
         ctx.toolState.standaloneCommentId = result.data.id;
       }
 
-      const enrichmentLinks =
-        issueNumber === ctx.payload.event.issue_number ? buildEnrichmentLinks(ctx) : [];
+      const enrichmentLinks = ownTarget ? buildEnrichmentLinks(ctx, issueNumber) : [];
       if (commentType === "Plan" || enrichmentLinks.length > 0) {
         if (commentType === "Plan" && result.data.node_id) {
           await patchWorkflowRunFields(ctx, { planCommentNodeId: result.data.node_id });
@@ -249,9 +251,9 @@ export async function reportProgress(
     return { body, action: "skipped" };
   }
 
-  const issueNumber = ctx.payload.event.issue_number ?? primaryRepoState(ctx.toolState).issueNumber;
+  const issueNumber = runIssueNumber(ctx);
   const isPlanMode = ctx.toolState.selectedMode === "Plan";
-  const enrichmentLinks = params.liveProgress ? [] : buildEnrichmentLinks(ctx);
+  const enrichmentLinks = params.liveProgress ? [] : buildEnrichmentLinks(ctx, issueNumber);
   const apiCtx = { octokit: ctx.octokit, owner: ctx.repo.owner, repo: ctx.repo.name };
 
   // when editing existing plan: update the plan comment from tool state (set by select_mode)

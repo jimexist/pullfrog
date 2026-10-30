@@ -269,7 +269,7 @@ export const repoConfigFields: ConfigField[] = [
     key: "address-reviews.enabled",
     field: "codingAddressReviews",
     kind: "toggle",
-    description: "address review feedback",
+    description: "address reviews on Pullfrog-authored PRs",
   },
   {
     key: "fix-ci.own-prs",

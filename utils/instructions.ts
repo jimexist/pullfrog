@@ -369,6 +369,7 @@ Rules:
 
 Use MCP tools from ${pullfrogMcpName} for all GitHub operations. Never use the \`gh\` CLI — it is not authenticated and will fail. The MCP tools handle authentication and enforce permissions.
 ${
+  ctx.payload.event.issue_number !== undefined &&
   hasSimilarIssues({ repoIntelligence: ctx.repoIntelligence, event: ctx.payload.event })
     ? `
 #### Duplicate detection (enabled for this repository)

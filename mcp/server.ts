@@ -189,7 +189,7 @@ function buildCommonTools(ctx: ToolContext, outputSchema?: JsonSchema): Pullfrog
   if (hasSimilarIssues({ repoIntelligence: ctx.repoIntelligence, event: ctx.payload.event })) {
     tools.push(SimilarIssuesTool(ctx));
   }
-  if (ctx.payload.event.issue_number !== undefined && !ctx.payload.event.is_pr) {
+  if (!ctx.payload.event.is_pr) {
     tools.push(SearchIssuesTool(ctx));
   }
 

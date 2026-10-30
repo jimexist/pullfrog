@@ -83,6 +83,14 @@ export {
   SUBSIDY_RUNG,
   TRIAL_FUNDED_USD_LIMIT,
 } from "../external.ts";
+export {
+  isOpenAICompatibleSetName,
+  openAICompatibleEnv,
+  openAICompatibleSetAlias,
+  openAICompatibleSetName,
+  openAICompatibleSetOf,
+  openAICompatibleSets,
+} from "../models.ts";
 export type { Mode } from "../modes.ts";
 export { modes } from "../modes.ts";
 export { type CommercialRefusal, commercialPaywallBody } from "../utils/billingErrors.ts";
@@ -106,6 +114,7 @@ export {
 export type { CredentialVerdict } from "../utils/credentialCheck.ts";
 export { isCredentialProbeable, verifyCredential } from "../utils/credentialCheck.ts";
 export { renderFailure } from "../utils/failureBody.ts";
+export { GENERATED } from "../utils/generatedFiles.ts";
 export type { ResourceUsage, UsageSummary } from "../utils/github.ts";
 export { isPullfrog } from "../utils/isPullfrog.ts";
 export {

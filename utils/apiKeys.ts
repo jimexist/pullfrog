@@ -10,12 +10,8 @@ import {
   getModelManagedCredentials,
   getOpenCodeEnvVars,
   modelAliases,
-  OPENAI_COMPATIBLE_API_KEY_ENV,
-  OPENAI_COMPATIBLE_BASE_URL_ENV,
-  OPENAI_COMPATIBLE_CONTEXT_ENV,
-  OPENAI_COMPATIBLE_MAX_OUTPUT_ENV,
-  OPENAI_COMPATIBLE_MODEL_ENV,
   OPENAI_COMPATIBLE_PROVIDER,
+  openAICompatibleEnv,
   providers,
   resolveDisplayAlias,
   TRIAL_FUNDED_USD_LIMIT,
@@ -316,17 +312,18 @@ function buildOpenAICompatibleSetupError(params: {
   owner: string;
   name: string;
   missing: string[];
+  env: ReturnType<typeof openAICompatibleEnv>;
 }): string {
   return buildSetupError({
     provider: "OpenAI-compatible endpoint",
     missing: params.missing,
     where: `Set them on the OpenAI-compatible provider in [Pullfrog's provider settings](${getApiUrl()}/console/${params.owner}#billing), or in the workflow's \`env:\` block with the key as an [Actions secret](${secretsUrl(params)}):`,
     env: [
-      `${OPENAI_COMPATIBLE_BASE_URL_ENV}: https://your-endpoint.example.com/v1`,
-      `${OPENAI_COMPATIBLE_API_KEY_ENV}: \${{ secrets.${OPENAI_COMPATIBLE_API_KEY_ENV} }}`,
-      `${OPENAI_COMPATIBLE_MODEL_ENV}: <model-id>`,
-      `${OPENAI_COMPATIBLE_CONTEXT_ENV}: "128000"`,
-      `${OPENAI_COMPATIBLE_MAX_OUTPUT_ENV}: "16384"`,
+      `${params.env.baseUrl}: https://your-endpoint.example.com/v1`,
+      `${params.env.apiKey}: \${{ secrets.${params.env.apiKey} }}`,
+      `${params.env.model}: <model-id>`,
+      `${params.env.context}: "128000"`,
+      `${params.env.maxOutput}: "16384"`,
     ],
     note: "Use the real context and output limits of the model your endpoint serves: Pullfrog can't discover them, and without them long runs grow until the endpoint refuses them.",
     guide: "https://docs.pullfrog.com/openai-compatible",
@@ -380,22 +377,27 @@ function hasPositiveNumberEnvVar(name: string): boolean {
   return Number(process.env[name]) > 0;
 }
 
-function validateOpenAICompatibleSetup(params: { owner: string; name: string }): void {
+/** checks the run's endpoint under the names it is stored as: a named set's own variables
+ * (`activateOpenAICompatibleSet` copied them into the bare ones), else the bare ones. */
+function validateOpenAICompatibleSetup(params: {
+  owner: string;
+  name: string;
+  set: string | undefined;
+}): void {
+  const env = openAICompatibleEnv(params.set);
   const missing: string[] = [];
-  if (!hasEnvVar(OPENAI_COMPATIBLE_BASE_URL_ENV)) missing.push(OPENAI_COMPATIBLE_BASE_URL_ENV);
-  if (!hasEnvVar(OPENAI_COMPATIBLE_API_KEY_ENV)) missing.push(OPENAI_COMPATIBLE_API_KEY_ENV);
-  if (!hasEnvVar(OPENAI_COMPATIBLE_MODEL_ENV)) missing.push(OPENAI_COMPATIBLE_MODEL_ENV);
+  if (!hasEnvVar(env.baseUrl)) missing.push(env.baseUrl);
+  if (!hasEnvVar(env.apiKey)) missing.push(env.apiKey);
+  if (!hasEnvVar(env.model)) missing.push(env.model);
   // required, not optional: opencode has no catalog metadata for a user-supplied
   // endpoint, and an undeclared limit both caps completions at 32000 and disables
   // auto-compaction for the whole run. see openAICompatibleLimit().
-  if (!hasPositiveNumberEnvVar(OPENAI_COMPATIBLE_CONTEXT_ENV))
-    missing.push(OPENAI_COMPATIBLE_CONTEXT_ENV);
-  if (!hasPositiveNumberEnvVar(OPENAI_COMPATIBLE_MAX_OUTPUT_ENV))
-    missing.push(OPENAI_COMPATIBLE_MAX_OUTPUT_ENV);
+  if (!hasPositiveNumberEnvVar(env.context)) missing.push(env.context);
+  if (!hasPositiveNumberEnvVar(env.maxOutput)) missing.push(env.maxOutput);
 
   if (missing.length > 0) {
     throw new Error(
-      buildOpenAICompatibleSetupError({ owner: params.owner, name: params.name, missing })
+      buildOpenAICompatibleSetupError({ owner: params.owner, name: params.name, missing, env })
     );
   }
 }
@@ -492,6 +494,8 @@ export function validateAgentApiKey(params: {
    * says nothing about what the user actually configured. */
   secretsUnavailable?: boolean | undefined;
   routerUnfunded?: boolean | undefined;
+  /** the named OpenAI-compatible set the run is on, from `activateOpenAICompatibleSet`. */
+  openAICompatibleSet?: string | undefined;
 }): void {
   if (params.model) {
     const alias = resolveDisplayAlias(params.model);
@@ -511,7 +515,11 @@ export function validateAgentApiKey(params: {
     // snapshot (it's injected into OPENCODE_CONFIG_CONTENT only at run time), so
     // validate the env-supplied base URL / key / model directly.
     if (params.model.startsWith(`${OPENAI_COMPATIBLE_PROVIDER}/`)) {
-      validateOpenAICompatibleSetup({ owner: params.owner, name: params.name });
+      validateOpenAICompatibleSetup({
+        owner: params.owner,
+        name: params.name,
+        set: params.openAICompatibleSet,
+      });
       return;
     }
 
